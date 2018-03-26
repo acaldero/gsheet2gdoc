@@ -1,0 +1,279 @@
+/**
+ * Alejandro Calderón Mateos
+ * License: MIT
+ * Based on the: "Generate Google Docs based on a template document and data incoming from a Google Spreadsheet" From Mikko Ohtamaa, http://opensourcehacker.com
+ */
+
+//
+// Documents
+//
+var TARGET_FOLDER       = "<Associated Google ID here>";
+
+var SUBJECT_SPREADSHEET = "<Associated Google ID here>";
+var FIRST_ROW           = 2; // starts as 1 = first row (header)
+var LAST_ROW            = 92;
+
+var SUBJECT_TEMPLATE    = "<Associated Google ID here>";
+var MATTER_TEMPLATE     = "<Associated Google ID here>";
+
+
+//
+// Code
+// 
+function getFirstRowAsArray(sheet) 
+{
+  var dataRange = sheet.getRange(1, 1, 1, 99);
+  var data = dataRange.getValues();
+  var columns = [];
+
+  for (i in data) 
+  {
+    var row = data[i];
+    //Logger.log("Got row", row);
+
+    for(var l=0; l<99; l++) 
+    {
+        var col = row[l];
+        // First empty column interrupts
+        if(!col) {
+            break;
+        }
+        columns.push(col);
+    }
+  }
+
+  return columns;
+}
+
+function getRowAsArray(sheet, header, row) 
+{
+  var dataRange = sheet.getRange(row, 1, 1, 99);
+  var data = dataRange.getValues();
+  var columns = [];
+
+  for (i in data) 
+  {
+    var row = data[i];
+    //Logger.log("Got row", row);
+
+    for(var l=0; l<header.length; l++) 
+    {
+        var col = row[l];
+        columns.push(col);
+    }
+  }
+
+  return columns;
+}
+
+function appendToDoc(src, dst) 
+{
+  for (var i = 0; i < src.getNumChildren(); i++) 
+  {
+     var type    = src.getChild(i).getType();
+     var element = src.getChild(i).removeFromParent();
+     if (type == "PARAGRAPH") {
+         dst.appendParagraph(element);
+     } else if (type == "TABLE") {
+         dst.appendTable(element);
+     } 
+  }
+}
+
+function short_list ( list_str ) 
+{
+   var list_arr   = list_str.split("), ") ;
+   var list_short = [] ;
+   for (var i=0; i<list_arr.length; i++)
+   {
+        var aa = list_arr[i].split("(") ;
+        list_short.push(aa[0].trim());
+   }
+   // Logger.log(" >> list_short: " + list_short);
+   return list_short.join(", ") ;
+}
+
+function sort_uniq_str ( list_str1, list_str2 ) 
+{
+   if ("" == list_str1.trim().toUpperCase())
+       return list_str2.trim().toUpperCase() ;
+
+   var aa = list_str1 + ", " + list_str2 ;
+   var bb = aa.split(/\n|\t|,|;/).map(function(ob){return ob.trim().toUpperCase();}).sort() ;
+   var result = [];
+   bb.forEach(function(item) {
+      if(result.indexOf(item) < 0) {
+          result.push(item);
+      }
+   });
+  
+   return result.join(", ") ;
+}
+
+
+/**
+ * Script entry point
+ */
+function main() 
+{
+  ///// 1.- origin: spreadsheet-subjects
+  var data_src = SpreadsheetApp.openById(SUBJECT_SPREADSHEET);
+  var sheet    = data_src.getSheets()[0];
+  var columns  = getFirstRowAsArray(sheet);
+  //Logger.log("Processing columns:" + columns);
+
+  ///// 2.- build document skel...
+  var active_document = { name:"", modulos:[] } ;
+  var active_module   = { name:"", materias:[] } ;
+  var active_materia  = { name:"", asignaturas:[] } ;
+  active_document.name = "UC3M-GII" ;
+
+  for (var k=FIRST_ROW; k<LAST_ROW; k++)
+  {
+     var customer_data = getRowAsArray(sheet, columns, k);  
+     //Logger.log("Row data:" + customer_data);
+
+     var active_subject = { name:"", eltos:[] } ;
+     for(var i=0; i<columns.length; i++) 
+     {
+         var key   = columns[i]; 
+         var value = customer_data[i] || ""; // No Javascript undefined
+         var newvalue = value ;
+
+         if ( ("{{ES_ASIGNATURA_MODULO}}" == key) && (active_module.name != value) )
+         {
+                var already_module = -1;
+                for (var j=0; j<active_document.modulos.length; j++)
+                { 
+                     if (active_document.modulos[j].name == value)
+                         already_module = j;
+                }
+                if (already_module == -1)
+                {
+                    already_module = active_document.modulos.length ;
+                    active_module  = { name:value, materias:[] } ;
+                    active_document.modulos.push(active_module) ;
+                }
+
+                active_module = active_document.modulos[already_module];
+         }
+         if ( ("{{ES_ASIGNATURA_MATERIA}}" == key) && (active_materia.name != value) )
+         {          
+                var already_matter = -1;
+                for (var j=0; j<active_module.materias.length; j++)
+                { 
+                     if (active_module.materias[j].name == value)
+                         already_matter = j;
+                }
+                if (already_matter == -1)
+                {
+                     already_matter = active_module.materias.length ;
+                     active_materia = { name:value, asignaturas:[] } ;
+                     active_module.materias.push(active_materia) ;
+                }
+
+                active_materia = active_module.materias[already_matter];           
+         }
+         if ( ("{{ES_ASIGNATURA_AF}}"     == key) || 
+              ("{{ES_ASIGNATURA_METDOC}}" == key) || 
+              ("{{ES_ASIGNATURA_EVAL}}"   == key) || 
+              ("{{ES_ASIGNATURA_RA}}"     == key) ) 
+         {
+                newvalue = short_list(value) ;
+         }
+         if ("{{ES_ASIGNATURA_NOMBRE}}" == key) 
+         {
+                active_subject.name = value ;
+         }
+       
+         active_subject.eltos.push({name:key, value:newvalue}) ;
+     }
+
+     active_materia.asignaturas.push(active_subject) ;
+  }
+
+  ///// 3.- extend document skel...
+  for (var i=0; i<active_document.modulos.length; i++)
+  {
+     for (var j=0; j<active_document.modulos[i].materias.length; j++)
+     {
+          active_document.modulos[i].materias[j].eltos = [] ;
+       
+          active_document.modulos[i].materias[j].eltos.push( {name:"{{ES_ASIGNATURA_ECTS}}",   value:0,  type:"int"} ) ;
+          active_document.modulos[i].materias[j].eltos.push( {name:"{{ES_ASIGNATURA_COMPET}}", value:"", type:"str"} ) ;
+          active_document.modulos[i].materias[j].eltos.push( {name:"{{ES_ASIGNATURA_RA}}",     value:"", type:"str"} ) ;
+          active_document.modulos[i].materias[j].eltos.push( {name:"{{ES_ASIGNATURA_AF}}",     value:"", type:"str"} ) ;
+          active_document.modulos[i].materias[j].eltos.push( {name:"{{ES_ASIGNATURA_METDOC}}", value:"", type:"str"} ) ;
+          active_document.modulos[i].materias[j].eltos.push( {name:"{{ES_ASIGNATURA_EVAL}}",   value:"", type:"str"} ) ;
+          for (var k=0; k<active_document.modulos[i].materias[j].asignaturas.length; k++)
+          {
+                for (var e=0; e<active_document.modulos[i].materias[j].asignaturas[k].eltos.length; e++)
+                {
+                    for (var f=0; f<active_document.modulos[i].materias[j].eltos.length; f++)
+                    {
+                         if (active_document.modulos[i].materias[j].eltos[f].name == active_document.modulos[i].materias[j].asignaturas[k].eltos[e].name)
+                             if (active_document.modulos[i].materias[j].eltos[f].type == "int")
+                                  active_document.modulos[i].materias[j].eltos[f].value = active_document.modulos[i].materias[j].eltos[f].value + 
+                                                                                          active_document.modulos[i].materias[j].asignaturas[k].eltos[e].value;
+                             else active_document.modulos[i].materias[j].eltos[f].value = sort_uniq_str(active_document.modulos[i].materias[j].eltos[f].value, 
+                                                                                                        active_document.modulos[i].materias[j].asignaturas[k].eltos[e].value);
+                    }
+                }
+          }
+          active_document.modulos[i].materias[j].eltos.push( {name:"{{ES_ASIGNATURA_NOMBRE}}", value:active_document.modulos[i].materias[j].name} ) ;
+     }
+  }
+
+  ///// 4.- destination: doc-summary
+  var target        = DocumentApp.create('nuevas-asignaturas-resumen.gdoc');
+  var target_body   = target.getBody();
+  var target_folder = DriveApp.getFolderById(TARGET_FOLDER); 
+  var newFile       = DriveApp.getFileById(target.getId());
+  target_folder.addFile(newFile); 
+
+  ///// 5.- build document...
+  for (var i=0; i<active_document.modulos.length; i++)
+  {
+     if ("" == active_document.modulos[i].name.trim())
+         continue; // skip records with empty module (placeholder of optional subjects)
+    
+     var par = target_body.appendParagraph("Módulo(s): " + active_document.modulos[i].name);
+     par.setHeading(DocumentApp.ParagraphHeading.HEADING1);
+       
+     for (var j=0; j<active_document.modulos[i].materias.length; j++)
+     {
+        //var par = target_body.appendParagraph("Materia: " + active_document.modulos[i].materias[j].name);
+        //par.setHeading(DocumentApp.ParagraphHeading.HEADING2);
+       
+        // matter
+        var template_copy_id = DriveApp.getFileById(MATTER_TEMPLATE).makeCopy().getId();
+        var template_copy    = DocumentApp.openById(template_copy_id);
+        var template_body    = template_copy.getActiveSection();
+        for (var e=0; e<active_document.modulos[i].materias[j].eltos.length; e++)
+        {
+             template_body.replaceText(active_document.modulos[i].materias[j].eltos[e].name, 
+                                       active_document.modulos[i].materias[j].eltos[e].value);
+        }
+        appendToDoc(template_copy, target);
+        template_copy.saveAndClose();
+        DriveApp.getFileById(template_copy_id).setTrashed(true);
+       
+        // subjects
+        for (var k=0; k<active_document.modulos[i].materias[j].asignaturas.length; k++)
+        {
+                var template_copy_id = DriveApp.getFileById(SUBJECT_TEMPLATE).makeCopy().getId();
+                var template_copy    = DocumentApp.openById(template_copy_id);
+                var template_body    = template_copy.getActiveSection();
+                for (var e=0; e<active_document.modulos[i].materias[j].asignaturas[k].eltos.length; e++)
+                {
+                     template_body.replaceText(active_document.modulos[i].materias[j].asignaturas[k].eltos[e].name, 
+                                               active_document.modulos[i].materias[j].asignaturas[k].eltos[e].value);
+                }
+                appendToDoc(template_copy, target);
+                template_copy.saveAndClose();
+                DriveApp.getFileById(template_copy_id).setTrashed(true);
+        }
+     }
+  }
+
+}
